@@ -1,0 +1,62 @@
+<!DOCTYPE html>  
+<html lang="en">  
+<head>  
+    <meta charset="UTF-8">  
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">  
+    <title>Verbal Communication Skills Trainer</title>  
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>  
+</head>  
+<body>  
+    <h1>Welcome to the Verbal Communication Skills Trainer!</h1>  
+    
+    <h2>Chat with the AI</h2>  
+    <textarea id="userInput" placeholder="Type your message here..."></textarea><br>  
+    <button onclick="sendChat()">Send</button>  
+    <p id="chatResponse"></p>  
+
+    <h2>Voice Input</h2>  
+    <button id="recordButton">Record</button>  
+    <p id="voiceResponse"></p>  
+
+    <script>  
+        function sendChat() {  
+            const userMessage = document.getElementById('userInput').value;  
+            $.post('/chat', { message: userMessage }, function(data) {  
+                document.getElementById('chatResponse').innerText = data.response || data.error;  
+            });  
+        }  
+
+        document.getElementById('recordButton').onclick = function() {  
+            navigator.mediaDevices.getUserMedia({ audio: true })  
+                .then(function(stream) {  
+                    const mediaRecorder = new MediaRecorder(stream);  
+                    mediaRecorder.start();  
+
+                    const audioChunks = [];  
+                    mediaRecorder.ondataavailable = function(event) {  
+                        audioChunks.push(event.data);  
+                    };  
+
+                    mediaRecorder.onstop = function() {  
+                        const audioBlob = new Blob(audioChunks);  
+                        const formData = new FormData();  
+                        formData.append('audio', audioBlob);  
+
+                        fetch('/voice', {  
+                            method: 'POST',  
+                            body: formData  
+                        })  
+                        .then(response => response.json())  
+                        .then(data => {  
+                            document.getElementById('voiceResponse').innerText = data.response || data.error;  
+                        });  
+                    };  
+
+                    setTimeout(() => {  
+                        mediaRecorder.stop();  
+                    }, 3000); // Record for 3 seconds  
+                });  
+        };  
+    </script>  
+</body>  
+</html>
