@@ -21,26 +21,38 @@
     <script>  
         function sendChat() {  
             const userMessage = document.getElementById('userInput').value;  
-            $.post('/chat', { message: userMessage }, function(data) {  
-                document.getElementById('chatResponse').innerText = data.response || data.error;  
-            });  
+            $.ajax({
+                url: "/chat",
+                type: "POST",
+                contentType: "application/json",
+                data: JSON.stringify({ message: userMessage }),
+                success: function (data) {
+                    document.getElementById("chatResponse").innerText = data.response || data.error;
+                },
+                error: function () {
+                    document.getElementById("chatResponse").innerText = "Error: Unable to get a response.";
+                }
+            });
         }  
+
+        let mediaRecorder;
+        let audioChunks = [];
 
         document.getElementById('recordButton').onclick = function() {  
             navigator.mediaDevices.getUserMedia({ audio: true })  
                 .then(function(stream) {  
-                    const mediaRecorder = new MediaRecorder(stream);  
-                    mediaRecorder.start();  
+                    mediaRecorder = new MediaRecorder(stream);
+                    mediaRecorder.start();
 
-                    const audioChunks = [];  
+                    audioChunks = [];  
                     mediaRecorder.ondataavailable = function(event) {  
                         audioChunks.push(event.data);  
                     };  
 
                     mediaRecorder.onstop = function() {  
-                        const audioBlob = new Blob(audioChunks);  
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });  
                         const formData = new FormData();  
-                        formData.append('audio', audioBlob);  
+                        formData.append('audio', audioBlob, 'recorded_audio.wav');
 
                         fetch('/voice', {  
                             method: 'POST',  
@@ -49,12 +61,17 @@
                         .then(response => response.json())  
                         .then(data => {  
                             document.getElementById('voiceResponse').innerText = data.response || data.error;  
-                        });  
+                        })  
+                        .catch(error => {
+                            document.getElementById('voiceResponse').innerText = "Error in processing audio.";
+                        });
                     };  
 
                     setTimeout(() => {  
                         mediaRecorder.stop();  
                     }, 3000); // Record for 3 seconds  
+                }).catch(err => {
+                    alert("Microphone access denied!");
                 });  
         };  
     </script>  

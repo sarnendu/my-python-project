@@ -1,146 +1,129 @@
 import os
+import time
+import logging
+import random
+import openai
+import sqlite3
+import speech_recognition as sr
 from dotenv import load_dotenv
-def main ():
-    load_dotenv()
-    api_value = os.getenv("OPENAI_API_KEY")
-    print (api_value)
-main ()
+from flask import Flask, request, jsonify, render_template
+from flask_cors import CORS
 
-import os  
-from flask import Flask, request, jsonify, render_template  
-from dotenv import load_dotenv  
-import openai  
-import sqlite3  
-import speech_recognition as sr  
-import logging  
+# Load environment variables
+load_dotenv()
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
-# Load environment variables securely  
-load_dotenv()  
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')  
-
-# Check if API key is loaded properly  
 if not OPENAI_API_KEY:
     raise ValueError("OpenAI API Key not found. Set it in .env or as an environment variable.")
 
-# Initialize Flask app and OpenAI  
-app = Flask(__name__)  
-openai.api_key = OPENAI_API_KEY  
+# Initialize Flask app
+app = Flask(__name__)
+CORS(app)  # Enable CORS for cross-origin requests
 
-# Configure logging  
-logging.basicConfig(level=logging.DEBUG)  
+# Initialize OpenAI client (for openai>=1.0.0)
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-# Database setup  
-def init_db():  
-    conn = sqlite3.connect('progress.db')  
-    cursor = conn.cursor()  
-    cursor.execute('''  
-        CREATE TABLE IF NOT EXISTS user_progress (  
-            id INTEGER PRIMARY KEY AUTOINCREMENT,  
-            user_id TEXT NOT NULL,  
-            activity_type TEXT NOT NULL,  
-            feedback TEXT  
-        )  
-    ''')  
-    conn.commit()  
-    conn.close()  
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
 
-# Initialize the database  
-init_db()  
+# ---------------------- Exponential Backoff Function ----------------------
+def retry_with_backoff(api_call, max_retries=3, base_delay=1, max_delay=16):
+    """Retries the OpenAI API call with exponential backoff in case of failure."""
+    retries = 0
+    while retries < max_retries:
+        try:
+            return api_call()
+        except openai.RateLimitError as e:
+            wait_time = min(base_delay * (2 ** retries) + random.uniform(0, 1), max_delay)
+            logging.warning(f"Rate limit exceeded. Retrying in {wait_time:.2f} seconds...")
+            time.sleep(wait_time)
+            retries += 1
+        except openai.OpenAIError as e:
+            logging.error(f"OpenAI API error: {e}")
+            break  # Don't retry other OpenAI API errors
+    return None  # If all retries fail
 
-# Home Route  
-@app.route('/')  
-def home():  
-    return render_template('index.html')  
-
-# Chat Interface  
-@app.route('/chat', methods=['POST'])  
-def chat():  
-    try:  
-        if not request.is_json:
-            return jsonify({'error': 'Invalid request format. Must be JSON.'}), 415
-
+# ---------------------- Chat API ----------------------
+@app.route('/chat', methods=['POST'])
+def chat():
+    """Handles text-based chat requests with OpenAI."""
+    try:
         data = request.get_json()
-        user_message = data.get('message')  
+        user_message = data.get('message')
 
         if not user_message:
             return jsonify({'error': 'Message is required'}), 400
 
-        response = openai.ChatCompletion.create(  
-            model="gpt-3.5-turbo",  
-            messages=[  
-                {"role": "system", "content": "You are a supportive coach helping improve verbal clarity."},  
-                {"role": "user", "content": user_message}  
-            ]  
-        )  
-        return jsonify({'response': response['choices'][0]['message']['content']})  
-    except Exception as e:  
-        logging.error(f'Error in chat: {e}')  
-        return jsonify({'error': 'An error occurred during the chat. Please try again.'}), 500  
+        logging.info(f"User message: {user_message}")
 
-# Voice Input Handling  
-@app.route('/voice', methods=['POST'])  
-def voice_input():  
-    try:  
-        if 'audio' not in request.files:
-            return jsonify({'error': 'No audio file provided'}), 400
-
-        audio_file = request.files['audio']
-
-        # Check if the uploaded file is in WAV format  
-        if not audio_file.filename.lower().endswith('.wav'):
-            return jsonify({'error': 'Invalid audio format. Please upload a WAV file.'}), 400
-
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(audio_file) as source:
-            audio_data = recognizer.record(source)
-            user_message = recognizer.recognize_google(audio_data)
-
-        response = openai.ChatCompletion.create(
+        # API call wrapped in retry mechanism
+        response = retry_with_backoff(lambda: client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "You are a supportive coach helping improve verbal clarity."},
                 {"role": "user", "content": user_message}
             ]
-        )
-        return jsonify({'user_message': user_message, 'response': response['choices'][0]['message']['content']})
+        ))
+
+        if response:
+            return jsonify({'response': response.choices[0].message.content})
+        else:
+            return jsonify({'error': 'Failed after multiple retries'}), 500
+
+    except Exception as e:
+        logging.error(f"Unexpected error: {e}")
+        return jsonify({'error': 'An unexpected error occurred. Please try again.'}), 500
+
+# ---------------------- Voice Input API ----------------------
+@app.route('/voice', methods=['POST'])
+def voice_input():
+    """Handles voice input, converts it to text, and generates an AI response."""
+    try:
+        if 'audio' not in request.files:
+            return jsonify({'error': 'No audio file provided'}), 400
+
+        audio_file = request.files['audio']
+
+        if not audio_file.filename.lower().endswith('.wav'):
+            return jsonify({'error': 'Invalid audio format. Please upload a WAV file.'}), 400
+
+        # Save and process audio file
+        temp_audio_path = "temp_audio.wav"
+        audio_file.save(temp_audio_path)
+
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(temp_audio_path) as source:
+            audio_data = recognizer.record(source)
+            user_message = recognizer.recognize_google(audio_data)
+
+        # API call wrapped in retry mechanism
+        response = retry_with_backoff(lambda: client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a supportive coach helping improve verbal clarity."},
+                {"role": "user", "content": user_message}
+            ]
+        ))
+
+        if response:
+            return jsonify({'user_message': user_message, 'response': response.choices[0].message.content})
+        else:
+            return jsonify({'error': 'Failed after multiple retries'}), 500
+
     except sr.UnknownValueError:
         return jsonify({'error': 'Could not understand the audio. Please try again.'}), 400
     except sr.RequestError as e:
         return jsonify({'error': f'Speech recognition service error: {e}'}), 500
     except Exception as e:
         logging.error(f'Error in voice input: {e}')
-        return jsonify({'error': 'An unexpected error occurred. Please try again.'}), 500  
+        return jsonify({'error': 'An unexpected error occurred. Please try again.'}), 500
 
-# Store Progress Function  
-def store_progress(user_id, activity_type, feedback):  
-    conn = sqlite3.connect('progress.db')  
-    cursor = conn.cursor()  
-    cursor.execute('INSERT INTO user_progress (user_id, activity_type, feedback) VALUES (?, ?, ?)',  
-                   (user_id, activity_type, feedback))  
-    conn.commit()  
-    conn.close()  
+# ---------------------- Home Route ----------------------
+@app.route('/')
+def home():
+    """Renders the homepage (index.html)."""
+    return render_template('index.html')  # Ensure index.html exists in the 'templates' folder
 
-# Impromptu Speaking Route  
-@app.route('/impromptu', methods=['POST'])  
-def impromptu():  
-    try:  
-        data = request.get_json()
-        user_response = data.get('response')  
-
-        evaluation = openai.ChatCompletion.create(  
-            model="gpt-3.5-turbo",  
-            messages=[  
-                {"role": "system", "content": "Evaluate this response for structure, clarity, and engagement."},  
-                {"role": "user", "content": user_response}  
-            ]  
-        )  
-
-        store_progress(user_id='some_user_id', activity_type='Impromptu Speaking', feedback=evaluation['choices'][0]['message']['content'])  
-        return jsonify({'evaluation': evaluation['choices'][0]['message']['content']})  
-    except Exception as e:  
-        logging.error(f'Error in impromptu: {e}')  
-        return jsonify({'error': 'An error occurred during the impromptu evaluation. Please try again.'}), 500  
-
-# Start Flask Server  
-if __name__ == '__main__':  
+# ---------------------- Run Flask App ----------------------
+if __name__ == '__main__':
     app.run(debug=True)
