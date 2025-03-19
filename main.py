@@ -1,4 +1,12 @@
 import os
+from dotenv import load_dotenv
+def main ():
+    load_dotenv()
+    api_value = os.getenv("OPENAI_API_KEY")
+    print (api_value)
+main ()
+
+import os
 import time
 import logging
 import random
@@ -8,6 +16,14 @@ import speech_recognition as sr
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
+from pydub import AudioSegment  # Added for audio conversion
+from pydub.utils import which
+# Manually specify the FFmpeg path
+FFMPEG_PATH = r"C:\ffmg\ffmpeg-2025-03-17-git-5b9356f18e-full_build\bin\ffmpeg.exe"  # Update with your actual path
+FFPROBE_PATH = r"C:\ffmg\ffmpeg-2025-03-17-git-5b9356f18e-full_build\bin\ffprobe.exe"  # Update with your actual path
+# Set the path to ffmpeg and ffprobe explicitly
+AudioSegment.converter = which("ffmpeg")
+AudioSegment.ffprobe = which("ffprobe")
 
 # Load environment variables
 load_dotenv()
@@ -18,9 +34,9 @@ if not OPENAI_API_KEY:
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)  # Enable CORS for cross-origin requests
+CORS(app)
 
-# Initialize OpenAI client (for openai>=1.0.0)
+# Initialize OpenAI client
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 # Configure logging
@@ -33,7 +49,7 @@ def retry_with_backoff(api_call, max_retries=3, base_delay=1, max_delay=16):
     while retries < max_retries:
         try:
             return api_call()
-        except openai.RateLimitError as e:
+        except openai.error.RateLimitError as e:  # Corrected exception
             wait_time = min(base_delay * (2 ** retries) + random.uniform(0, 1), max_delay)
             logging.warning(f"Rate limit exceeded. Retrying in {wait_time:.2f} seconds...")
             time.sleep(wait_time)
@@ -85,11 +101,14 @@ def voice_input():
         audio_file = request.files['audio']
 
         if not audio_file.filename.lower().endswith('.wav'):
-            return jsonify({'error': 'Invalid audio format. Please upload a WAV file.'}), 400
+            return jsonify({'error': 'Invalid audio format. Only WAV files are supported.'}), 400
 
-        # Save and process audio file
+        # Convert file to PCM WAV (if necessary)
         temp_audio_path = "temp_audio.wav"
         audio_file.save(temp_audio_path)
+
+        audio = AudioSegment.from_file(temp_audio_path)
+        audio.export(temp_audio_path, format="wav")
 
         recognizer = sr.Recognizer()
         with sr.AudioFile(temp_audio_path) as source:
@@ -121,8 +140,7 @@ def voice_input():
 # ---------------------- Home Route ----------------------
 @app.route('/')
 def home():
-    """Renders the homepage (index.html)."""
-    return render_template('index.html')  # Ensure index.html exists in the 'templates' folder
+    return render_template('index.html')
 
 # ---------------------- Run Flask App ----------------------
 if __name__ == '__main__':
