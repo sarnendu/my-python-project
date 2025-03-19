@@ -6,17 +6,37 @@
     <title>Verbal Communication Skills Trainer</title>  
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>  
 </head>  
+
 <body>  
     <h1>Welcome to the Verbal Communication Skills Trainer!</h1>  
-    
+
+    <!-- Chat Section -->
     <h2>Chat with the AI</h2>  
     <textarea id="userInput" placeholder="Type your message here..."></textarea><br>  
     <button onclick="sendChat()">Send</button>  
     <p id="chatResponse"></p>  
 
+    <!-- Voice Input Section -->
     <h2>Voice Input</h2>  
     <button id="recordButton">Record</button>  
     <p id="voiceResponse"></p>  
+
+    <!-- Image Upload Section -->
+    <h2>Upload an Image for AI Analysis</h2>  
+    <input type="file" id="imageUpload" accept="image/*">
+    <br><br>
+    <img id="previewImage" src="" alt="Image Preview" style="max-width: 300px; display: none;">
+    <br>
+    <button onclick="sendImage()">Analyze Image</button>  
+    <p id="imageResponse"></p>  
+
+    <!-- Voice + Image Upload Section -->
+    <h2>Upload Image with Voice Input</h2>
+    <input type="file" id="imageUpload2" accept="image/*">
+    <button id="recordButton2">Record Voice</button>
+    <br><br>
+    <button onclick="sendVoiceImage()">Analyze Voice & Image</button>
+    <p id="voiceImageResponse"></p>
 
     <script>  
         function sendChat() {  
@@ -35,45 +55,160 @@
             });
         }  
 
+        // Voice Recording & Processing
         let mediaRecorder;
         let audioChunks = [];
 
-        document.getElementById('recordButton').onclick = function() {  
-            navigator.mediaDevices.getUserMedia({ audio: true })  
-                .then(function(stream) {  
+        document.getElementById('recordButton').addEventListener('click', function () {
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(function (stream) {
                     mediaRecorder = new MediaRecorder(stream);
                     mediaRecorder.start();
+                    console.log("Recording started...");
 
-                    audioChunks = [];  
-                    mediaRecorder.ondataavailable = function(event) {  
-                        audioChunks.push(event.data);  
-                    };  
+                    audioChunks = [];
+                    mediaRecorder.ondataavailable = function (event) {
+                        if (event.data.size > 0) {
+                            audioChunks.push(event.data);
+                        }
+                    };
 
-                    mediaRecorder.onstop = function() {  
-                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });  
-                        const formData = new FormData();  
+                    mediaRecorder.onstop = function () {
+                        console.log("Recording stopped.");
+                        if (audioChunks.length === 0) {
+                            alert("No audio recorded. Try again.");
+                            return;
+                        }
+
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        const formData = new FormData();
                         formData.append('audio', audioBlob, 'recorded_audio.wav');
 
-                        fetch('/voice', {  
-                            method: 'POST',  
-                            body: formData  
-                        })  
-                        .then(response => response.json())  
-                        .then(data => {  
-                            document.getElementById('voiceResponse').innerText = data.response || data.error;  
-                        })  
+                        fetch('/voice', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            document.getElementById('voiceResponse').innerText = data.response || "Error: No response from server.";
+                        })
                         .catch(error => {
+                            console.error("Error processing audio:", error);
                             document.getElementById('voiceResponse').innerText = "Error in processing audio.";
                         });
-                    };  
+                    };
 
-                    setTimeout(() => {  
-                        mediaRecorder.stop();  
-                    }, 3000); // Record for 3 seconds  
-                }).catch(err => {
+                    setTimeout(() => {
+                        mediaRecorder.stop();
+                    }, 5000); // Record for 5 seconds
+                })
+                .catch(err => {
+                    alert("Microphone access denied or blocked!");
+                    console.error("Microphone access error:", err);
+                });
+        });
+
+        // Image Upload Preview
+        document.getElementById('imageUpload').addEventListener('change', function (event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function (e) {
+                    document.getElementById('previewImage').src = e.target.result;
+                    document.getElementById('previewImage').style.display = 'block';
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Send Image for Analysis
+        function sendImage() {
+            const imageFile = document.getElementById('imageUpload').files[0];
+            if (!imageFile) {
+                alert("Please select an image!");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('image', imageFile);
+
+            fetch('/image', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('imageResponse').innerText = data.response || data.error;
+            })
+            .catch(error => {
+                document.getElementById('imageResponse').innerText = "Error in processing image.";
+            });
+        }
+
+        // Voice & Image Recording
+        let mediaRecorder2;
+        let audioChunks2 = [];
+
+        document.getElementById('recordButton2').addEventListener('click', function () {
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(function (stream) {
+                    mediaRecorder2 = new MediaRecorder(stream);
+                    mediaRecorder2.start();
+                    console.log("Recording started for voice + image...");
+
+                    audioChunks2 = [];
+                    mediaRecorder2.ondataavailable = function (event) {
+                        if (event.data.size > 0) {
+                            audioChunks2.push(event.data);
+                        }
+                    };
+
+                    mediaRecorder2.onstop = function () {
+                        console.log("Recording stopped.");
+                        document.getElementById('recordButton2').innerText = "Recording Done!";
+                    };
+
+                    setTimeout(() => {
+                        mediaRecorder2.stop();
+                    }, 3000); // Record for 3 seconds
+                })
+                .catch(err => {
                     alert("Microphone access denied!");
-                });  
-        };  
+                    console.error("Microphone access error:", err);
+                });
+        });
+
+        // Send Voice & Image for Analysis
+        function sendVoiceImage() {
+            const imageFile = document.getElementById('imageUpload2').files[0];
+            if (!imageFile) {
+                alert("Please select an image!");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('image', imageFile);
+
+            if (audioChunks2.length > 0) {
+                const audioBlob = new Blob(audioChunks2, { type: 'audio/wav' });
+                formData.append('audio', audioBlob, 'recorded_audio.wav');
+            } else {
+                alert("Please record your voice!");
+                return;
+            }
+
+            fetch('/voice_image', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('voiceImageResponse').innerText = data.response || data.error;
+            })
+            .catch(error => {
+                document.getElementById('voiceImageResponse').innerText = "Error in processing voice and image.";
+            });
+        }
     </script>  
 </body>  
 </html>

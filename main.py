@@ -7,141 +7,168 @@ def main ():
 main ()
 
 import os
-import time
-import logging
-import random
-import openai
-import sqlite3
-import speech_recognition as sr
-from dotenv import load_dotenv
+import cv2
+import numpy as np
 from flask import Flask, request, jsonify, render_template
-from flask_cors import CORS
-from pydub import AudioSegment  # Added for audio conversion
-from pydub.utils import which
-# Manually specify the FFmpeg path
-FFMPEG_PATH = r"C:\ffmg\ffmpeg-2025-03-17-git-5b9356f18e-full_build\bin\ffmpeg.exe"  # Update with your actual path
-FFPROBE_PATH = r"C:\ffmg\ffmpeg-2025-03-17-git-5b9356f18e-full_build\bin\ffprobe.exe"  # Update with your actual path
-# Set the path to ffmpeg and ffprobe explicitly
-AudioSegment.converter = which("ffmpeg")
-AudioSegment.ffprobe = which("ffprobe")
+import openai
+from dotenv import load_dotenv
+import speech_recognition as sr
+from pydub import AudioSegment
+from PIL import Image
+import pytesseract
 
 # Load environment variables
 load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
+# Check API Key
 if not OPENAI_API_KEY:
-    raise ValueError("OpenAI API Key not found. Set it in .env or as an environment variable.")
-
-# Initialize Flask app
-app = Flask(__name__)
-CORS(app)
+    raise ValueError("OpenAI API Key is missing. Set it in the .env file.")
 
 # Initialize OpenAI client
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
+# Initialize Flask App
+app = Flask(__name__)
 
-# ---------------------- Exponential Backoff Function ----------------------
-def retry_with_backoff(api_call, max_retries=3, base_delay=1, max_delay=16):
-    """Retries the OpenAI API call with exponential backoff in case of failure."""
-    retries = 0
-    while retries < max_retries:
-        try:
-            return api_call()
-        except openai.error.RateLimitError as e:  # Corrected exception
-            wait_time = min(base_delay * (2 ** retries) + random.uniform(0, 1), max_delay)
-            logging.warning(f"Rate limit exceeded. Retrying in {wait_time:.2f} seconds...")
-            time.sleep(wait_time)
-            retries += 1
-        except openai.OpenAIError as e:
-            logging.error(f"OpenAI API error: {e}")
-            break  # Don't retry other OpenAI API errors
-    return None  # If all retries fail
+# Ensure FFmpeg is set up properly
+AudioSegment.converter = "C:/ffmg/ffmpeg-2025-03-17-git-5b9356f18e-full_build/bin/ffmpeg.exe"
+AudioSegment.ffprobe = "C:/ffmg/ffmpeg-2025-03-17-git-5b9356f18e-full_build/bin/ffprobe.exe"
 
-# ---------------------- Chat API ----------------------
-@app.route('/chat', methods=['POST'])
-def chat():
-    """Handles text-based chat requests with OpenAI."""
-    try:
-        data = request.get_json()
-        user_message = data.get('message')
+# Set Tesseract OCR path (Update this path if needed)
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
-        if not user_message:
-            return jsonify({'error': 'Message is required'}), 400
-
-        logging.info(f"User message: {user_message}")
-
-        # API call wrapped in retry mechanism
-        response = retry_with_backoff(lambda: client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a supportive coach helping improve verbal clarity."},
-                {"role": "user", "content": user_message}
-            ]
-        ))
-
-        if response:
-            return jsonify({'response': response.choices[0].message.content})
-        else:
-            return jsonify({'error': 'Failed after multiple retries'}), 500
-
-    except Exception as e:
-        logging.error(f"Unexpected error: {e}")
-        return jsonify({'error': 'An unexpected error occurred. Please try again.'}), 500
-
-# ---------------------- Voice Input API ----------------------
-@app.route('/voice', methods=['POST'])
-def voice_input():
-    """Handles voice input, converts it to text, and generates an AI response."""
-    try:
-        if 'audio' not in request.files:
-            return jsonify({'error': 'No audio file provided'}), 400
-
-        audio_file = request.files['audio']
-
-        if not audio_file.filename.lower().endswith('.wav'):
-            return jsonify({'error': 'Invalid audio format. Only WAV files are supported.'}), 400
-
-        # Convert file to PCM WAV (if necessary)
-        temp_audio_path = "temp_audio.wav"
-        audio_file.save(temp_audio_path)
-
-        audio = AudioSegment.from_file(temp_audio_path)
-        audio.export(temp_audio_path, format="wav")
-
-        recognizer = sr.Recognizer()
-        with sr.AudioFile(temp_audio_path) as source:
-            audio_data = recognizer.record(source)
-            user_message = recognizer.recognize_google(audio_data)
-
-        # API call wrapped in retry mechanism
-        response = retry_with_backoff(lambda: client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a supportive coach helping improve verbal clarity."},
-                {"role": "user", "content": user_message}
-            ]
-        ))
-
-        if response:
-            return jsonify({'user_message': user_message, 'response': response.choices[0].message.content})
-        else:
-            return jsonify({'error': 'Failed after multiple retries'}), 500
-
-    except sr.UnknownValueError:
-        return jsonify({'error': 'Could not understand the audio. Please try again.'}), 400
-    except sr.RequestError as e:
-        return jsonify({'error': f'Speech recognition service error: {e}'}), 500
-    except Exception as e:
-        logging.error(f'Error in voice input: {e}')
-        return jsonify({'error': 'An unexpected error occurred. Please try again.'}), 500
-
-# ---------------------- Home Route ----------------------
+# Home Route
 @app.route('/')
 def home():
     return render_template('index.html')
 
-# ---------------------- Run Flask App ----------------------
+# Chat Route
+@app.route('/chat', methods=['POST'])
+def chat():
+    try:
+        data = request.get_json()
+        user_message = data.get('message', '')
+
+        if not user_message:
+            return jsonify({'error': 'No message provided'}), 400
+
+        response = openai.ChatCompletion.create(
+            model="gpt-4-turbo",
+            messages=[{"role": "user", "content": user_message}]
+        )
+
+        return jsonify({'response': response['choices'][0]['message']['content']})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Voice Input Route
+@app.route('/voice', methods=['POST'])
+def voice():
+    try:
+        if 'audio' not in request.files:
+            return jsonify({'error': 'No audio file uploaded'}), 400
+
+        audio_file = request.files['audio']
+        temp_audio_path = "temp_audio.wav"
+        audio_file.save(temp_audio_path)
+
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(temp_audio_path) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data)
+
+        return jsonify({'response': text})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Image Upload Route (With Preprocessing)
+@app.route('/image', methods=['POST'])
+def image():
+    try:
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image uploaded'}), 400
+
+        image_file = request.files['image']
+        image_path = "uploaded_image.png"
+        image_file.save(image_path)
+
+        # Open image using OpenCV
+        img = cv2.imread(image_path)
+
+        # Convert to Grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        # Apply Gaussian Blur (optional)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+        # Edge Detection (Canny)
+        edges = cv2.Canny(blurred, 50, 150)
+
+        # OCR (Extract text from image)
+        extracted_text = pytesseract.image_to_string(gray)
+
+        # Save processed image
+        processed_path = "processed_image.png"
+        cv2.imwrite(processed_path, edges)
+
+        # Send to OpenAI with extracted text
+        response = openai.ChatCompletion.create(
+            model="gpt-4-turbo-vision",
+            messages=[
+                {"role": "system", "content": "You are an AI that analyzes images."},
+                {"role": "user", "content": f"Extracted text from image: {extracted_text}. What do you see in this image?"}
+            ],
+            files=[{"type": "image", "image_path": processed_path}]
+        )
+
+        return jsonify({
+            'response': response['choices'][0]['message']['content'],
+            'extracted_text': extracted_text
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Combined Voice & Image Processing
+@app.route('/voice_image', methods=['POST'])
+def voice_image():
+    try:
+        if 'audio' not in request.files or 'image' not in request.files:
+            return jsonify({'error': 'Both audio and image are required'}), 400
+
+        # Process Audio
+        audio_file = request.files['audio']
+        temp_audio_path = "temp_audio.wav"
+        audio_file.save(temp_audio_path)
+
+        recognizer = sr.Recognizer()
+        with sr.AudioFile(temp_audio_path) as source:
+            audio_data = recognizer.record(source)
+            text = recognizer.recognize_google(audio_data)
+
+        # Process Image
+        image_file = request.files['image']
+        image_path = "uploaded_image.png"
+        image_file.save(image_path)
+
+        # OpenAI request
+        response = openai.ChatCompletion.create(
+            model="gpt-4-turbo-vision",
+            messages=[
+                {"role": "system", "content": "You analyze both speech and images."},
+                {"role": "user", "content": f"The user said: {text}. What do you see in this image?"}
+            ],
+            files=[{"type": "image", "image_path": image_path}]
+        )
+
+        return jsonify({'response': response['choices'][0]['message']['content']})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# Run Flask Server
 if __name__ == '__main__':
     app.run(debug=True)
