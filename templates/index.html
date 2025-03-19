@@ -5,6 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">  
     <title>Verbal Communication Skills Trainer</title>  
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>  
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }
+        h1 { color: #007BFF; }
+        textarea { width: 80%; height: 50px; }
+        button { margin: 10px; padding: 10px; cursor: pointer; }
+        p { font-weight: bold; }
+        #previewImage { max-width: 300px; display: none; border: 2px solid #ddd; margin-top: 10px; }
+    </style>
 </head>  
 
 <body>  
@@ -18,39 +26,45 @@
 
     <!-- Voice Input Section -->
     <h2>Voice Input</h2>  
-    <button id="recordButton">Record</button>  
+    <button id="recordButton">Start Recording</button>  
+    <button id="stopRecordButton" style="display: none;">Stop Recording</button>  
     <p id="voiceResponse"></p>  
 
     <!-- Image Upload Section -->
     <h2>Upload an Image for AI Analysis</h2>  
-    <input type="file" id="imageUpload" accept="image/*">
-    <br><br>
-    <img id="previewImage" src="" alt="Image Preview" style="max-width: 300px; display: none;">
-    <br>
+    <input type="file" id="imageUpload" accept="image/*">  
+    <img id="previewImage" alt="Image Preview">  
     <button onclick="sendImage()">Analyze Image</button>  
     <p id="imageResponse"></p>  
 
     <!-- Voice + Image Upload Section -->
-    <h2>Upload Image with Voice Input</h2>
-    <input type="file" id="imageUpload2" accept="image/*">
-    <button id="recordButton2">Record Voice</button>
-    <br><br>
-    <button onclick="sendVoiceImage()">Analyze Voice & Image</button>
-    <p id="voiceImageResponse"></p>
+    <h2>Upload Image with Voice Input</h2>  
+    <input type="file" id="imageUpload2" accept="image/*">  
+    <button id="recordButton2">Start Recording</button>  
+    <button id="stopRecordButton2" style="display: none;">Stop Recording</button>  
+    <button onclick="sendVoiceImage()">Analyze Voice & Image</button>  
+    <p id="voiceImageResponse"></p>  
 
     <script>  
         function sendChat() {  
             const userMessage = document.getElementById('userInput').value;  
+            if (!userMessage.trim()) {
+                alert("Please enter a message.");
+                return;
+            }
+
+            $("#chatResponse").text("Processing...");
+            
             $.ajax({
                 url: "/chat",
                 type: "POST",
                 contentType: "application/json",
                 data: JSON.stringify({ message: userMessage }),
                 success: function (data) {
-                    document.getElementById("chatResponse").innerText = data.response || data.error;
+                    $("#chatResponse").text(data.response || "Error: No response.");
                 },
                 error: function () {
-                    document.getElementById("chatResponse").innerText = "Error: Unable to get a response.";
+                    $("#chatResponse").text("Error: Unable to get a response.");
                 }
             });
         }  
@@ -59,7 +73,7 @@
         let mediaRecorder;
         let audioChunks = [];
 
-        document.getElementById('recordButton').addEventListener('click', function () {
+        function startRecording(buttonId, stopButtonId) {
             navigator.mediaDevices.getUserMedia({ audio: true })
                 .then(function (stream) {
                     mediaRecorder = new MediaRecorder(stream);
@@ -73,57 +87,66 @@
                         }
                     };
 
+                    $(`#${buttonId}`).hide();
+                    $(`#${stopButtonId}`).show();
+
                     mediaRecorder.onstop = function () {
                         console.log("Recording stopped.");
-                        if (audioChunks.length === 0) {
-                            alert("No audio recorded. Try again.");
-                            return;
-                        }
-
-                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-                        const formData = new FormData();
-                        formData.append('audio', audioBlob, 'recorded_audio.wav');
-
-                        fetch('/voice', {
-                            method: 'POST',
-                            body: formData
-                        })
-                        .then(response => response.json())
-                        .then(data => {
-                            document.getElementById('voiceResponse').innerText = data.response || "Error: No response from server.";
-                        })
-                        .catch(error => {
-                            console.error("Error processing audio:", error);
-                            document.getElementById('voiceResponse').innerText = "Error in processing audio.";
-                        });
+                        processAudio('/voice', 'voiceResponse', audioChunks);
+                        $(`#${buttonId}`).show();
+                        $(`#${stopButtonId}`).hide();
                     };
-
-                    setTimeout(() => {
-                        mediaRecorder.stop();
-                    }, 5000); // Record for 5 seconds
                 })
                 .catch(err => {
-                    alert("Microphone access denied or blocked!");
-                    console.error("Microphone access error:", err);
+                    alert("Microphone access denied!");
+                    console.error("Microphone error:", err);
                 });
-        });
+        }
+
+        function stopRecording() {
+            if (mediaRecorder) {
+                mediaRecorder.stop();
+            }
+        }
+
+        function processAudio(url, responseId, audioChunks) {
+            if (audioChunks.length === 0) {
+                alert("No audio recorded. Try again.");
+                return;
+            }
+
+            const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+            const formData = new FormData();
+            formData.append('audio', audioBlob, 'recorded_audio.wav');
+
+            fetch(url, { method: 'POST', body: formData })
+                .then(response => response.json())
+                .then(data => {
+                    $(`#${responseId}`).text(data.response || "Error processing audio.");
+                })
+                .catch(error => {
+                    console.error("Error processing audio:", error);
+                    $(`#${responseId}`).text("Error in processing.");
+                });
+        }
+
+        $("#recordButton").click(() => startRecording('recordButton', 'stopRecordButton'));
+        $("#stopRecordButton").click(stopRecording);
 
         // Image Upload Preview
-        document.getElementById('imageUpload').addEventListener('change', function (event) {
-            const file = event.target.files[0];
+        $("#imageUpload").change(function () {
+            const file = this.files[0];
             if (file) {
                 const reader = new FileReader();
-                reader.onload = function (e) {
-                    document.getElementById('previewImage').src = e.target.result;
-                    document.getElementById('previewImage').style.display = 'block';
+                reader.onload = (e) => {
+                    $("#previewImage").attr("src", e.target.result).show();
                 };
                 reader.readAsDataURL(file);
             }
         });
 
-        // Send Image for Analysis
         function sendImage() {
-            const imageFile = document.getElementById('imageUpload').files[0];
+            const imageFile = $("#imageUpload")[0].files[0];
             if (!imageFile) {
                 alert("Please select an image!");
                 return;
@@ -132,82 +155,52 @@
             const formData = new FormData();
             formData.append('image', imageFile);
 
-            fetch('/image', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                document.getElementById('imageResponse').innerText = data.response || data.error;
-            })
-            .catch(error => {
-                document.getElementById('imageResponse').innerText = "Error in processing image.";
-            });
+            fetch('/image', { method: 'POST', body: formData })
+                .then(response => response.json())
+                .then(data => {
+                    $("#imageResponse").text(data.response || "Error processing image.");
+                })
+                .catch(() => {
+                    $("#imageResponse").text("Error in processing image.");
+                });
         }
 
-        // Voice & Image Recording
-        let mediaRecorder2;
+        // Voice + Image Upload
         let audioChunks2 = [];
 
-        document.getElementById('recordButton2').addEventListener('click', function () {
-            navigator.mediaDevices.getUserMedia({ audio: true })
-                .then(function (stream) {
-                    mediaRecorder2 = new MediaRecorder(stream);
-                    mediaRecorder2.start();
-                    console.log("Recording started for voice + image...");
-
-                    audioChunks2 = [];
-                    mediaRecorder2.ondataavailable = function (event) {
-                        if (event.data.size > 0) {
-                            audioChunks2.push(event.data);
-                        }
-                    };
-
-                    mediaRecorder2.onstop = function () {
-                        console.log("Recording stopped.");
-                        document.getElementById('recordButton2').innerText = "Recording Done!";
-                    };
-
-                    setTimeout(() => {
-                        mediaRecorder2.stop();
-                    }, 3000); // Record for 3 seconds
-                })
-                .catch(err => {
-                    alert("Microphone access denied!");
-                    console.error("Microphone access error:", err);
-                });
+        $("#recordButton2").click(() => {
+            audioChunks2 = [];
+            startRecording('recordButton2', 'stopRecordButton2');
         });
 
-        // Send Voice & Image for Analysis
+        $("#stopRecordButton2").click(() => {
+            stopRecording();
+        });
+
         function sendVoiceImage() {
-            const imageFile = document.getElementById('imageUpload2').files[0];
+            const imageFile = $("#imageUpload2")[0].files[0];
             if (!imageFile) {
                 alert("Please select an image!");
                 return;
             }
 
-            const formData = new FormData();
-            formData.append('image', imageFile);
-
-            if (audioChunks2.length > 0) {
-                const audioBlob = new Blob(audioChunks2, { type: 'audio/wav' });
-                formData.append('audio', audioBlob, 'recorded_audio.wav');
-            } else {
+            if (audioChunks2.length === 0) {
                 alert("Please record your voice!");
                 return;
             }
 
-            fetch('/voice_image', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                document.getElementById('voiceImageResponse').innerText = data.response || data.error;
-            })
-            .catch(error => {
-                document.getElementById('voiceImageResponse').innerText = "Error in processing voice and image.";
-            });
+            const formData = new FormData();
+            formData.append('image', imageFile);
+            formData.append('audio', new Blob(audioChunks2, { type: 'audio/wav' }), 'recorded_audio.wav');
+
+            fetch('/voice_image', { method: 'POST', body: formData })
+                .then(response => response.json())
+                .then(data => {
+                    $("#voiceImageResponse").text(data.response || "Error processing data.");
+                })
+                .catch(() => {
+                    $("#voiceImageResponse").text("Error in processing.");
+                });
         }
     </script>  
 </body>  
